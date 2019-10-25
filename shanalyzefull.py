@@ -1,4 +1,4 @@
-#!/usr/bin/python
+#!/usr/bin/python3
 
 import numpy as np
 import pylab as pl
@@ -9,6 +9,7 @@ from matplotlib import animation
 # by locating the places where the intensity crosses the 50% value
 #
 def computecenter(pslicey):
+    #center of pupil image
     psliceymax = np.amax(pslicey)
     dp = pslicey[1:] - pslicey[:-1]
     dx = ( psliceymax/2 - pslicey[1:] ) / dp
@@ -19,26 +20,36 @@ def computecenter(pslicey):
     pupilobsc = yvals[2] - yvals[1]
     pupilceny1 = (yvals[3] + yvals[0]) / 2.
     pupilceny2 = (yvals[1] + yvals[2]) / 2.
-    print pupildiay, pupilceny1, pupilceny2              
+    print(pupildiay, pupilceny1, pupilceny2)
 
-    return pupildiay, pupilobsc, (pupilceny1+pupilceny2)/2.
+    return(pupildiay, pupilobsc, (pupilceny1+pupilceny2)/2.)
+
+
 
 def makecube():
+    # not used, takes individual images and makes cube
     datadir = '/data/agws/wfs_images/'
-    skyfile = datadir + 'mg2201811170440450105.fits'
+    skyfile = datadir + 'mg2201811180604590157.fits'
 
     skyimg = fits.open(skyfile)[0].data
     imgstack = []
-    with open('/home/bmcleod/Junk/flist') as fp:
+    timestamps = []
+    with open('/home/jkansky/scripts/bright_star_zen_transit.wfslist') as fp:
         for fitsname in fp:
-            img = fits.open(datadir+fitsname.strip())[0].data.astype(float)
+            hdu = fits.open(fitsname.strip())[0]
+            img = hdu.data.astype(float)
+            hdr = hdu.header
+            timestamps.append(hdr['DATE-OBS']+'T'+hdr['UT'])
             imgstack.append(img-skyimg)
 
     imgstack = np.array(imgstack)
             
-    fits.writeto('/home/bmcleod/Junk/imgstack.fits',imgstack,overwrite=True)
+    fits.writeto('/home/jkansky/scripts/imgstack.fits',imgstack,overwrite=True)
+    return(timestamps)
 
-cube = fits.open('/home/bmcleod/Junk/imgstack.fits')[0].data
+
+timestamps = makecube()
+cube = fits.open('/home/jkansky/scripts/imgstack.fits')[0].data
 
 # Rotation angle between SH and Proto3 coordinates
 rotangle = np.radians(27.8)
@@ -55,16 +66,19 @@ nx = 34
 ny = 34
 nframes = len(cube)
 
+#led refererence frame
 templateimagename = '/data/agws/wfs_images/mg2201811162322310838.fits'
 
-# Process the template image
+# Process the template image, find and centroid spots
 templateimage = fits.open(templateimagename)[0].data
 xtemplate = np.zeros((nx,ny))
 ytemplate = np.zeros((nx,ny))
 
+# planning to implement correlation, unused
 ix = np.arange(5) - 2
 gauss1d = np.exp((ix*ix)/2.)
 
+#loop over spot grid
 for iy in range(ny):
     for ix in range(nx):
         xmin = int(x0 + ix * dx)
@@ -83,7 +97,7 @@ for iy in range(ny):
         xtemplate[iy,ix] = xcen
         ytemplate[iy,ix] = ycen
 
-
+#repeat for each data image
 xarr = np.zeros((nframes,ny,nx))
 yarr = np.zeros((nframes,ny,nx))
 countarr   = np.zeros((nframes,ny,nx))
@@ -115,12 +129,13 @@ for iframe in range(nframes):
             yarr[iframe,iy,ix] = ycen - ytemplate[iy,ix]
             countarr[iframe,iy,ix] = counts
             
-# Find the middle of the pupil
+# Find the middle of the pupil, refine based on 
 pupilmap = countarr.mean(axis=0)
-print pupilmap.shape
+print(pupilmap.shape)
 
-pslicex = pupilmap[iy/2-5:iy/2+5,:].sum(axis=0)
-pslicey = pupilmap[:,ix/2-5:ix/2+5].sum(axis=1)
+#center ten rows and columns
+pslicex = pupilmap[int(ny/2-5):int(ny/2+5),:].sum(axis=0)
+pslicey = pupilmap[:,int(nx/2-5):int(nx/2+5)].sum(axis=1)
 #pl.plot(pslicex)
 #pl.plot(pslicey)
 #pl.show()
@@ -128,13 +143,13 @@ pslicey = pupilmap[:,ix/2-5:ix/2+5].sum(axis=1)
 pupildiax, pupilobscx, pupilcenx = computecenter(pslicex)
 pupildiay, pupilobscy, pupilceny = computecenter(pslicey)
 
+# get coords of pupil with radius of one
 py,px = np.indices(pupilmap.shape)
 normalizedpupilx = (px - pupilcenx)/(pupildiax/2.)
 normalizedpupily = (py - pupilceny)/(pupildiay/2.)
 obscuration = ((pupilobscx / pupildiax) + (pupilobscy / pupildiay)) / 2.
 pupilrad = np.sqrt(normalizedpupilx**2 + normalizedpupily**2)
 inpupil =  (pupilrad < 1) * (pupilrad > obscuration)
-print ('Obscuration ratio: ', obscuration)
 
 iframe = 0
 meancounts = countarr[iframe][inpupil].mean()
@@ -183,13 +198,14 @@ aper_y = aper_rad * np.sin(aper_theta)
 for ax, ay in zip(aper_x, aper_y):
     cornerx = [-0.75, -0.75, 0.75, 0.75, -0.75]
     cornery = [-0.75, 0.75,  0.75, -0.75, -0.75]
-    #ax.plot((cornerx + ax), (cornery + ay))
+    pl.plot((cornerx + ax), (cornery + ay))
 
-anim = animation.FuncAnimation(fig, update_quiver, interval=nframes, blit=False)
-fig.tight_layout()              
+#anim = animation.FuncAnimation(fig, update_quiver, interval=nframes, blit=False)
+#fig.tight_layout()              
 
 
-
+# Make image of which phasing subaps are in use for calcs
+# Compute piston
 apernum = 1
 pl.figure()
 pistonvals = []
@@ -200,6 +216,7 @@ for ax, ay in zip(aper_x, aper_y):
     pl.plot(normalizedpupilx[illum], normalizedpupily[illum],'ro')
     pl.plot(normalizedpupilx[ingap], normalizedpupily[ingap],'go')
 
+    #compute piston difference
     gapsize = 0.5 # meters
     for iframe in range(nframes):
         xtilt = xarr[iframe][illum].mean()
@@ -217,9 +234,19 @@ pl.legend()
 pl.title('SH derived piston')
 pl.ylabel('piston (nm)')
 pl.xlabel('Frame number')          
-pl.show()    
 
-fits.writeto("/home/bmcleod/Junk/intensity.fits",countarr,overwrite=True)
+piston_file = open("sh_pistons.txt","w")
+piston_file.write("UT\tAP1\t AP2\tAP3\n");
+for loop in range(nframes):
+    piston_file.write("%s\t%f\t%f\t%f\n" % (timestamps[loop],
+                                            pistonvals[0][loop],
+                                            pistonvals[1][loop],
+                                            pistonvals[2][loop]))
+piston_file.close()
+
+fits.writeto("/home/jkansky/scripts/intensity.fits",countarr,overwrite=True)
+
+pl.show()
 
 #        xtilt = xarr[iframe,:,illum].mean()
 #        ytilt = yarr[iframe,illum,:].mean()
