@@ -4,7 +4,34 @@ import numpy as np
 import pylab as pl
 import astropy.io.fits as fits
 from matplotlib import animation
+from astropy.io import ascii
+#%%
+def fitbackground(im, backgroundimages, radius):
+    yy,xx = np.indices((im.shape))
+    yy -= im.shape[0]//2
+    xx -= im.shape[1]//2
+    rr = np.sqrt(xx*xx+yy*yy)
+    outer = (rr>radius).flatten()
+    bg = backgroundimages.reshape(backgroundimages.shape[0], -1)
+    A = bg[:,outer]
+    print(A.shape)
+    print(bg.shape)
+    fit = np.linalg.lstsq(A,im.flatten()[outer])
+    print(fit)
 
+fitbackground(im,backgroundimages,190)
+#%%
+# returns xoffset, yoffset
+def shgridcenter(shimage):
+    gridspacing = 14
+    offset = np.zeros((2))
+    for axis in [0,1]:
+        cut = shimage.sum(axis=axis)
+        center = len(cut) // 2
+        offset[axis] =  np.argmax(cut[center-gridspacing//2:center+gridspacing//2]) - gridspacing//2
+    return (offset)
+
+ #%%   
 # Find the edges of the pupil assuming we have a central obscuration
 # by locating the places where the intensity crosses the 50% value
 #
@@ -26,7 +53,7 @@ def computecenter(pslicey):
 
 
 
-def makecube():
+def makecube(listfilename, stackfilename):
     # not used, takes individual images and makes cube
     datadir = '/data/agws/wfs_images/'
     skyfile = datadir + 'mg2201811180604590157.fits'
@@ -34,23 +61,29 @@ def makecube():
     skyimg = fits.open(skyfile)[0].data
     imgstack = []
     timestamps = []
-    with open('/home/jkansky/scripts/bright_star_zen_transit.wfslist') as fp:
-        for fitsname in fp:
-            hdu = fits.open(fitsname.strip())[0]
-            img = hdu.data.astype(float)
-            hdr = hdu.header
-            timestamps.append(hdr['DATE-OBS']+'T'+hdr['UT'])
-            imgstack.append(img-skyimg)
+    t = ascii.read(listfilename)
+    
+    for fitsname in t['wfsname']:
+        hdu = fits.open(datadir+fitsname.strip())[0]
+        img = hdu.data.astype(float)
+        hdr = hdu.header
+        timestamps.append(hdr['DATE-OBS']+'T'+hdr['UT'])
+        imgstack.append(img-skyimg)
 
     imgstack = np.array(imgstack)
             
-    fits.writeto('/home/jkansky/scripts/imgstack.fits',imgstack,overwrite=True)
+    fits.writeto(stackfilename,imgstack,overwrite=True)
     return(timestamps)
+#%%
+listfilename = '/home/bmcleod/analysis/proto3c/matched_files.txt'
+listfilename = '/home/bmcleod/analysis/proto3c/onefile.txt'
+stackfilename = '/home/bmcleod/analysis/wfsimages/imgstack.fits'
 
+timestamps = makecube(listfilename,stackfilename)
 
-timestamps = makecube()
-cube = fits.open('/home/jkansky/scripts/imgstack.fits')[0].data
-
+#%%
+cube = fits.open(stackfilename)[0].data
+#%%
 # Rotation angle between SH and Proto3 coordinates
 rotangle = np.radians(27.8)
 
@@ -236,15 +269,16 @@ pl.ylabel('piston (nm)')
 pl.xlabel('Frame number')          
 
 piston_file = open("sh_pistons.txt","w")
-piston_file.write("UT\tAP1\t AP2\tAP3\n");
+piston_file.write("UT\tAP1\t AP2\tAP3\tcounts\n");
 for loop in range(nframes):
-    piston_file.write("%s\t%f\t%f\t%f\n" % (timestamps[loop],
-                                            pistonvals[0][loop],
-                                            pistonvals[1][loop],
-                                            pistonvals[2][loop]))
+    piston_file.write("%s\t%f\t%f\t%f\n%f" % (timestamps[loop],
+                                              pistonvals[0][loop],
+                                              pistonvals[1][loop],
+                                              pistonvals[2][loop],
+                                              meancounts[loop]))
 piston_file.close()
 
-fits.writeto("/home/jkansky/scripts/intensity.fits",countarr,overwrite=True)
+fits.writeto("/home/bmcleod/analysis/proto3c/intensity.fits",countarr,overwrite=True)
 
 pl.show()
 
