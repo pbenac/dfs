@@ -7,9 +7,11 @@ from scipy.ndimage.measurements import center_of_mass
 import scipy.special
 from scipy import ndimage
 
+recenter_with_xcor = False
+
 class PhaseData:
 
-    def __init__(self,indata, xcen, ycen, n, edgewidth,windowradius=14, windowfwhm=4, startindex=None, stopindex=None):
+    def __init__(self,indata, xcen, ycen, n, edgewidth,windowradius=14, windowfwhm=4, startindex=None, stopindex=None, refboxes=None):
         """Compute and coadd the FFTs of a list of boxes extracted from a cube of images
 
         Arguments:
@@ -23,8 +25,9 @@ class PhaseData:
            stopindex:    python index of last frame to process
 
         Attributes: (each of these is a list, one item per box position)
-           ftabs: sum of absolute value of fft of each image in the cube
+           dfsabs: sum of absolute value of fft of each image in the cube
            ftphi: phase of sum of fft of each image
+           ftabs: abs of sum of fft of each image
            dxphi: phase of ft(v,u) x ft*(v,u+1) -- Knox-Thompson cross term x component
            dyphi: phase of ft(v,u) x ft*(v+1,u) -- Knox-Thompson cross term y component
            dxabs: amplitude of Knox-Thompson cross term x component
@@ -48,6 +51,7 @@ class PhaseData:
         softwindow = np.real(np.fft.fftshift(np.fft.ifft2(np.fft.fft2(hardwindow)*np.fft.fft2(np.flipud(np.fliplr(gaussiankernel))))))
         softwindow /= np.max(softwindow)
 
+        self.dfsabs = []
         self.ftabs = []
         self.ftphi = []
         self.dxphi = []
@@ -55,12 +59,14 @@ class PhaseData:
         self.dxabs = []
         self.dyabs = []
         self.boxavg = []
+        self.dfsabs = []
 
         boxy,boxx=np.indices((n,n))
 
         edge = (boxy<edgewidth) + (boxy>=n-edgewidth) + (boxx<edgewidth)  + (boxx>=n-edgewidth)
 
         i=1
+        iy,ix = np.indices((n,n)) - n / 2.
         for ibox,(x,y) in enumerate(zip(xcen,ycen)):
 
             if (y<n/2):
@@ -73,36 +79,87 @@ class PhaseData:
             elif(len(indata.shape) == 3):
                 data = indata[startindex:stopindex]
 
-            ftabs = np.zeros((n,n))
+            dfsabs = np.zeros((n,n))
             ft = np.zeros((n,n), dtype=np.complex_)
             boxavg = np.zeros((n,n))
             dxsum = np.zeros((n,n-1), dtype=np.complex_)
             dysum = np.zeros((n-1,n), dtype=np.complex_)
+
+            # Prepare for recentering using cross correlation 
+            if refboxes!=None:
+                reffft_conj = np.conj(np.fft.fftshift(np.fft.fft2(refboxes[ibox])))
+
+            peakxx = []
+            peakyy = []
+
+            # For each short exposure image
+            #
             for im in data:
+                    
+                # Extract the box
                 box = im[int(y-n/2):int(y+n/2),int(x-n/2):int(x+n/2)].copy()
+
+                # Subtract the background level using the edge pixels
                 box = box - np.mean(box[edge])
+
+                # Compute the FFT
                 boxfft = np.fft.fftshift(np.fft.fft2(np.fft.fftshift(box*softwindow)))
+                
+                if refboxes != None and recenter_with_xcor:
+                    # Recenter by cross-correlating with template
+                    xcor = np.real(np.fft.fft2(np.fft.fftshift(boxfft * reffft_conj)))
+                    # Peak pixel in cross-correlation
+                    peakpix = np.unravel_index(np.argmax(xcor), np.shape(xcor))
+
+                    # Interpolated peak
+                    # Y
+                    I1 = xcor[peakpix[0] - 1, peakpix[1]]
+                    I2 = xcor[peakpix[0],     peakpix[1]]
+                    I3 = xcor[peakpix[0] + 1, peakpix[1]]
+                    peaky = peakpix[0] + (I1 - I3) / ( I1 + I3 - 2 * I2 ) / 2 - n/2
+                    
+                    # X
+                    I1 = xcor[peakpix[0], peakpix[1] - 1]
+                    I3 = xcor[peakpix[0], peakpix[1] + 1]
+                    peakx = peakpix[1] + (I1 - I3) / ( I1 + I3 - 2 * I2 ) / 2 - n/2
+
+                    # Shift image by adjusting phase 
+                    boxfft = boxfft * np.exp(-(ix * peakx  + iy * peaky) / n * 2 * np.pi * 1j)
+                
+                # Sum KT cross terms and abs(FFT)
                 dxsum = dxsum + boxfft[:,:-1] * np.conj(boxfft)[:,1:]
                 dysum = dysum + boxfft[:-1,:] * np.conj(boxfft)[1:,:]
-                ftabs = ftabs + abs(boxfft)
+                dfsabs = dfsabs + abs(boxfft)
+                self.box = box
+                self.boxfft = abs(boxfft)
+                # Sum FT for DHS analysis
                 ft = ft + boxfft
+
                 boxavg += box * softwindow
+
+            # Use shifted sum 
+            if refboxes!=None:
+                boxavg = np.real(np.fft.fftshift(np.fft.fft2(np.fft.fftshift(ft))))
+
+            # Normalized sum(abs(FFT))
             n2=int(n/2)
-            ftabs = ftabs / (ftabs[n2-1,n2] + ftabs[n2+1,n2] + ftabs[n2,n2-1] + ftabs[n2,n2+1])
+            dfsabs = dfsabs / (dfsabs[n2-1,n2] + dfsabs[n2+1,n2] + dfsabs[n2,n2-1] + dfsabs[n2,n2+1])
+            
+            # Normalize mean image
             boxavg = boxavg / len(data)
-            # Compute centroid
-            iy,ix = np.indices(boxavg.shape) - len(boxavg) / 2.
+            #
+            # Compute centroid of mean image
             xcen = (ix * boxavg).sum() / boxavg.sum()
             ycen = (iy * boxavg).sum() / boxavg.sum()
-
 
             # Remove wavefront tilt using measured centroid
             centroid_phase_correction = -(ix * xcen  + iy * ycen) / n * 2 * np.pi 
             centroid_dx_correction = -xcen / n * 2 * np.pi
             centroid_dy_correction = -ycen / n * 2 * np.pi
             
-            self.ftabs.append(ftabs)
+            self.dfsabs.append(dfsabs)
             self.ftphi.append(np.angle(ft) - centroid_phase_correction)
+            self.ftabs.append(np.abs(ft))
             self.dxphi.append(np.angle(dxsum) - centroid_dx_correction)
             self.dyphi.append(np.angle(dysum) - centroid_dy_correction)
             self.dxabs.append(np.abs(dxsum))
@@ -118,7 +175,8 @@ class PhaseData:
             self.ktpiston  = []
 
             for i in range(len(self.ftphi)):
-                self.dhspiston.append((self.ftphi[i][int(ypeakobjs[i]),int(xpeakobjs[i])]-ref.ftphi[i][int(ypeakrefs[i]),int(xpeakrefs[i])]) / 2 / np.pi * Wavelen)
+#                self.dhspiston.append((self.ftphi[i][int(ypeakobjs[i]),int(xpeakobjs[i])]-ref.ftphi[i][int(ypeakrefs[i]),int(xpeakrefs[i])]) / 2 / np.pi * Wavelen)
+                self.dhspiston.append(self.dhsanalyze(self.ftphi[i], 1, 5,12, Wavelen))
                 dxphi_diff = self.dxphi[i][20,:] - ref.dxphi[i][20,:]
                 dxphi_diff -= dxphi_diff[20:24].mean()
                 self.ktpiston.append(dxphi_diff[24:27].sum() / np.pi / 2. * Wavelen)
@@ -127,14 +185,28 @@ class PhaseData:
             self.dhspiston = np.array(self.dhspiston)
             self.ktpiston = np.array(self.ktpiston)
 
+    def dhsanalyze(self,phasemap,maxrow,col_mid,col_end,Wavelen):
+        n = len(phasemap)
+        # Assume that phases are within +/- pi
+        vec = phasemap[n//2 - maxrow : n//2 + maxrow + 1 , n//2 - col_end : n//2 + col_end + 1 ].mean(axis=0)
+        A=np.zeros((2,len(vec)))
+        nvec = len(vec)
+        A[0] = np.arange(len(vec)) - nvec//2
+        A[1][:nvec//2-col_mid] = -1
+        A[1][nvec//2+col_mid+1:] = 1
+        fit = np.linalg.lstsq(A.T,vec, rcond=None)[0]  
+        vec_fit = fit.dot(A)
+        phase_err  = fit[1]/ np.pi / 2. * Wavelen
+        return phase_err
+    
     def analyzefft(image, kernel, colmin, colmax):
 
         frngpows = []
         xpeaks = []
         ypeaks = []
 
-        imageffts = image.ftabs
-        kernellist = kernel.ftabs
+        imageffts = image.dfsabs
+        kernellist = kernel.dfsabs
 
         if (len(imageffts) != len(kernellist)):
             print("You need to pass in a kernel for each box")
@@ -180,6 +252,7 @@ class PhaseData:
     def savefits(self, root):
         fits.PrimaryHDU(self.ftabs).writeto(root+"-ftabs.fits",overwrite=True)
         fits.PrimaryHDU(self.ftphi).writeto(root+"-ftphi.fits",overwrite=True)
+        fits.PrimaryHDU(self.dfsabs).writeto(root+"-dfsabs.fits",overwrite=True)
         fits.PrimaryHDU(self.boxavg).writeto(root+"-boxes.fits",overwrite=True)
         fits.PrimaryHDU(self.dxphi).writeto(root+"-dphix.fits",overwrite=True)
         fits.PrimaryHDU(self.dxphi).writeto(root+"-dphiy.fits",overwrite=True)

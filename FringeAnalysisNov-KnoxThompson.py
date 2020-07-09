@@ -2,7 +2,7 @@
 import astropy.io.fits as fits
 import numpy as np
 import pylab as pl
-from scipy.signal import correlate
+from scipy.signal import correlate, correlate2d
 from scipy.ndimage.measurements import center_of_mass
 import scipy.special
 from scipy import ndimage
@@ -320,6 +320,24 @@ def get_ref_fringe_config(fits_hdr,box_num):
         return float(fits_hdr['NAXIS1'])/2, float(fits_hdr['NAXIS1'])/2, 0
 
 
+def proto3_centers ( image, fits_hdr ):
+    sigma = 16
+    template = np.zeros(image.shape)
+    iy, ix = np.indices(template.shape)
+    
+    for box_num in [1, 2, 3]:
+        boxx, boxy, oadist = get_fringe_config(fits_hdr, box_num)
+
+        spot = np.exp(-((iy - boxy)**2 + (ix - boxx)**2) / 2 / sigma)
+        template = template + spot
+
+    xcor = np.real(np.fft.fftshift(np.fft.fft2(np.conj(np.fft.fft2(image)) * np.fft.fft2( template))))
+    shifty, shiftx = np.unravel_index(np.argmax(xcor), xcor.shape)
+    shifty = shifty - xcor.shape[0]//2
+    shiftx = shiftx - xcor.shape[1]//2
+    eprint("Shift", shiftx, shifty)
+    return shiftx, shifty
+
 
 # Default parameters
 #
@@ -461,7 +479,7 @@ if (darkf!=None):
 if (flatf!=None):
     flat = fits.open(flatf)[0].data
     if (darkf != None):
-        flat -= dark
+        flat -= darkav
 
     bad_pix = np.where(flat <= 0)
     if (len(bad_pix) > 0):
@@ -519,7 +537,7 @@ else:
 
     # Apply darks and flats to ref image if it is measured
     if (darkf!=None):
-        refimage -= dark
+        refimage -= darkav
     if (flatf!=None):
         refimage /= flat
 
@@ -634,10 +652,17 @@ for dataf in args:
     imav = scipy.signal.medfilt(imav,3)
     imav -= np.median(imav)
 
+
+    shiftx, shifty = proto3_centers(imav, hdr)
+
+    
     # Iteratively find the center of the fringes
     b2 = int(boxsize/4)
     fwhmest = np.zeros(3)
     for k in range(3):
+        xcenimg[k] += shiftx
+        ycenimg[k] += shifty
+        eprint("Box %d: %d %d" % (k, xcenimg[k], ycenimg[k]))
         subim = imav[ycenimg[k]-b2:ycenimg[k]+b2,
                      xcenimg[k]-b2:xcenimg[k]+b2].copy()
 
@@ -669,20 +694,38 @@ for dataf in args:
         dark = PhaseData(dark,xcenimg,ycenimg,boxsize, edgewidth)
 
     # Compute FFTs of fringes
-    im = PhaseData(data, xcenimg, ycenimg, boxsize, edgewidth)
+    eprint ("data", data.shape)
+    eprint ("xcenimg, ycenimg", xcenimg, ycenimg)
+    eprint ("boxsize", boxsize)
+    eprint ("refboxes", ref.boxavg[0].shape)
+    
+    im = PhaseData(data, xcenimg, ycenimg, boxsize, edgewidth, refboxes = ref.boxavg)
 
     # Loop over three fringe pattern FFTs and perfrom dark subtraction in
     # selfcalib mode, and save FFTs as FITS
-    for i in range(len(im.ftabs)):
+
+    import pyds9
+    ds9 = pyds9.DS9()
+    ds9.set('frame 1')
+    ds9.set_np2arr(im.dfsabs[0])
+    if selfcalib:
+        ds9.set('frame 2')
+        ds9.set_np2arr(dark.dfsabs[0])
+
+    for i in range(len(im.dfsabs)):
         if selfcalib:
             # Seems like it would be more correct to subtract the dark noise
             # in quadrature but it doesnt work very well
-            #  temp = np.sqrt(np.abs(im.ftabs[i]**2 - darkfftlist[i]**2 ))
-            temp = im.ftabs[i] - dark.ftabs[i]
-            im.ftabs[i] = temp
+            #  temp = np.sqrt(np.abs(im.dfsabs[i]**2 - darkfftlist[i]**2 ))
+            temp = im.dfsabs[i]**2 - dark.dfsabs[i]**2 
+            #temp = im.dfsabs[i] - dark.dfsabs[i]
+            im.dfsabs[i] = temp
+
+        ds9.set('frame 3')
+        ds9.set_np2arr(im.dfsabs[0])
             
         fftname = '.fft'.join(os.path.splitext(dataf))
-        fits.PrimaryHDU(np.array(im.ftabs)).writeto(fftname,overwrite=True)
+        fits.PrimaryHDU(np.array(im.dfsabs)).writeto(fftname,overwrite=True)
         dphixname = '.dphix'.join(os.path.splitext(dataf))
         fits.PrimaryHDU(np.array(im.dxphi)).writeto(dphixname,overwrite=True)
         dphiyname = '.dphiy'.join(os.path.splitext(dataf))
@@ -695,28 +738,28 @@ for dataf in args:
         # data
         reordered_contrastrefs = []
         reordered_peakrefs = []
-        saveft = ref.ftabs.copy()
+        saveft = ref.dfsabs.copy()
         savecontrasts = ref.contrasts.copy()
         saveypeaks = ref.ypeaks.copy()
         savexpeaks = ref.xpeaks.copy()
-        ref.ftabs = []
+        ref.dfsabs = []
         ref.constrasts = []
         ref.ypeaks = []
         ref.xpeaks = []
         for oaindex in range(len(oadistsimg)):
             data_oapos = oadistsimg[oaindex]
             if (data_oapos == 0):
-                ref.ftabs.append(saveft[0])
+                ref.dfsabs.append(saveft[0])
                 ref.constrasts.append(savecontrasts[0])
                 ref.ypeaks.append(saveypeaks[0])
                 ref.xpeaks.append(savexpeaks[0])
             elif (data_oapos == 6):
-                ref.ftabs.append(saveft[2])
+                ref.dfsabs.append(saveft[2])
                 ref.constrasts.append(savecontrasts[2])
                 ref.ypeaks.append(saveypeaks[2])
                 ref.xpeaks.append(savexpeaks[2])
             elif (data_oapos == 8):
-                ref.ftabs.append(saveft[1])
+                ref.dfsabs.append(saveft[1])
                 ref.constrasts.append(savecontrasts[1])
                 ref.ypeaks.append(saveypeaks[1])
                 ref.xpeaks.append(savexpeaks[1])
