@@ -2,7 +2,7 @@ import numpy as np
 
 class DFS:
 
-    def __init__(self, pixsize=0.07, dispersion=5, nsteps=40, wavemin=1.027e-6, wavemax=1.358e-6, pupilpix=0.25,fieldang=0, imsize = 48, gap=0.4):
+    def __init__(self, pixsize=0.07, dispersion=5, nsteps=40, wavemin=1.027e-6, wavemax=1.358e-6, pupilpix=0.025, fieldang=0, imsize=48, gap=0.4):
         """Initialize a DFS
 
         Arguments:
@@ -88,10 +88,10 @@ class DFS:
 if (__name__ == "__main__"):
 
     from  phasesensor import *
-    import pyds9
+    #import pyds9
     import time
-    ds9 = pyds9.DS9()
-    ds9.set('frame 1')
+    #ds9 = pyds9.DS9()
+    #ds9.set('frame 1')
     wavefrontmap = np.zeros((80,80))
     wavefrontmap[:,40:] = 1
 
@@ -103,8 +103,10 @@ if (__name__ == "__main__"):
 
     # Spectral dispersion
     pixsize    = 0.07 # arcsec
+    #ninox_pixsize = 0.07 * (16/24)
     dispersion = 5 # arcsec per micron
     PixelsPerMicron = dispersion / pixsize
+    #PixelsPerMicron = dispersion / ninox_pixsize
     Wavelength = ( 1.358 + 1.027 ) / 2.
 
     # Conversion of pixel shift of FFT peak to nm of piston error
@@ -112,8 +114,10 @@ if (__name__ == "__main__"):
 
 #   Generate reference image
     d = DFS(pupilpix=0.025,imsize=imsize, pixsize = pixsize, dispersion = dispersion)
-    refimage = d.mkimage()
+    #d = DFS(pupilpix=0.025,imsize=imsize, pixsize = ninox_pixsize, dispersion = dispersion)
 
+    refimage = d.mkimage()
+    
 #   Measure reference image
     ref = PhaseData(refimage, [imsize/2], [imsize/2], boxsize, edgewidth)
     ref.computeresults(ref, ccmin, ccmax, PixPerNm, Wavelength)
@@ -138,19 +142,19 @@ if (__name__ == "__main__"):
     inputs = np.asarray(inputs)
     outputs = np.asarray(outputs)
     
-    import pylab as pl
-    pl.plot(inputs, outputs-inputs,'.-')
-    pl.xlabel("Piston input to simulation")
-    pl.ylabel("Measured - Input")
+    import matplotlib.pyplot as plt
+    plt.plot(inputs, outputs-inputs,'.-')
+    plt.xlabel("Piston input to simulation")
+    plt.ylabel("Measured - Input")
 
-    pl.figure()
-    pl.plot(inputs, outputs,'.-')
-    pl.plot(inputs, inputs, '-')
-    pl.xlabel("Piston input to simulation")
-    pl.ylabel("Measured piston")
+    plt.figure()
+    plt.plot(inputs, outputs,'.-')
+    plt.plot(inputs, inputs, '-')
+    plt.xlabel("Piston input to simulation")
+    plt.ylabel("Measured piston")
 
     
-    pl.show()
+    plt.show()
         
         
 

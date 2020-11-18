@@ -67,6 +67,7 @@ class PhaseData:
 
         i=1
         iy,ix = np.indices((n,n)) - n / 2.
+        # Iterate over each box in the input center arrays
         for ibox,(x,y) in enumerate(zip(xcen,ycen)):
 
             if (y<n/2):
@@ -205,12 +206,17 @@ class PhaseData:
         xpeaks = []
         ypeaks = []
 
+        if not isinstance(kernel, PhaseData):
+            raise TypeError('Kernel must be a PhaseData object')
+        if not isinstance(image, PhaseData):
+            raise TypeError('Image must be a PhaseData object')
+            
         imageffts = image.dfsabs
         kernellist = kernel.dfsabs
 
         if (len(imageffts) != len(kernellist)):
-            print("You need to pass in a kernel for each box")
-            exit
+            raise Error("You need to pass in a kernel for each box")
+            
 
         for box_loop in range(len(imageffts)):
             z = imageffts[box_loop]
@@ -258,7 +264,7 @@ class PhaseData:
         fits.PrimaryHDU(self.dxphi).writeto(root+"-dphiy.fits",overwrite=True)
 
 
-def pinholefft (rad, n):
+def pinholefft(rad, n):
     # Compute FFT of pinhole circular tophat = sombrero function
 
     y,x=np.indices((n,n))
