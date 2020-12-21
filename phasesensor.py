@@ -178,6 +178,7 @@ class PhaseData:
             for i in range(len(self.ftphi)):
 #                self.dhspiston.append((self.ftphi[i][int(ypeakobjs[i]),int(xpeakobjs[i])]-ref.ftphi[i][int(ypeakrefs[i]),int(xpeakrefs[i])]) / 2 / np.pi * Wavelen)
                 self.dhspiston.append(self.dhsanalyze(self.ftphi[i], 1, 5,12, Wavelen))
+                # Peyton: CHeck indices here vv
                 dxphi_diff = self.dxphi[i][20,:] - ref.dxphi[i][20,:]
                 dxphi_diff -= dxphi_diff[20:24].mean()
                 self.ktpiston.append(dxphi_diff[24:27].sum() / np.pi / 2. * Wavelen)
@@ -234,11 +235,15 @@ class PhaseData:
             # Fit a parabola to the central 3 pixels, and determine the maximum
             #
             center=(abs(cx-maxindex)<2)
+            print('cx center', cx[center])
+            print('cc center', cc[center])
+
             p = np.polyfit(cx[center],cc[center],2)
 
             fit = p[0] * cx * cx + p[1] * cx + p[2]
 
             ypeak =  -p[1]/2./p[0]
+            
 
             peakval = p[0] * ypeak * ypeak + p[1] * ypeak + p[2]
 
