@@ -32,3 +32,34 @@ def raw_to_npy(filelist, rawsize=262150, newsize=(512,512), idxcutoff=6):
         all_data[i] = np.fromfile(file, dtype=np.short)
         all_images[i] = all_data[i][idxcutoff:].reshape(newsize)  
     return [all_data, all_images]
+
+def get_spots(image, threshold_value=2000, pix_apart=8):
+    '''
+    Return a list containing x,y coordinates of every spot in the image. Spots are defined by being above threshold_value counts and separated by other spots by pix_apart pixels.
+    
+    Inputs:
+    -------
+    image [2-D numpy array]
+    threshold_value [default:2000]
+    pix_apart [default:8]
+    
+    Outputs:
+    --------
+    spots (list)
+    --> can be unpacked into x and y arrays with y,x = zip(*spots)
+    '''
+    pix_above_thr = []
+    where = np.where(image > threshold_value)
+    npix = len(where[0])
+    spots = []
+    for j in range(int(npix)):
+
+        pix_above_thr.append(np.array([where[0][j], where[1][j]]))
+        if j == 0:
+            spots.append(pix_above_thr[-1])
+        if j > 1:
+            d = pix_above_thr[-1] - pix_above_thr[-2]
+            dist = np.linalg.norm(d)
+            if dist > pix_apart: # new spot!
+                spots.append(np.array(pix_above_thr[-1]))            
+    return spots
