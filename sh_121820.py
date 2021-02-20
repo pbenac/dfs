@@ -1,7 +1,7 @@
 from astropy.io import fits
 import numpy as np
 import pylab as pl
-%matplotlib notebook
+#%matplotlib notebook
 
 import glob
 import sh
@@ -16,7 +16,7 @@ import matplotlib.pyplot as plt
 from shanalyzefull import shgridcenter
 from sh_analysisfxns_pb import raw_to_npy, get_spots
 
-# shwfdir = '/home/pbenac/home/Thesis/raw_SHWF_images'
+shwfdir = '/home/pbenac/home/Thesis/raw_SHWF_images'
 filelist = glob.glob(shwfdir + '/SHWF-11132020*.raw')
 filelist.sort()
 [data, images] = raw_to_npy(filelist)

@@ -1,5 +1,6 @@
 import numpy as np
-import pylab as pl
+#import pylab as pl
+import matplotlib.pyplot as pl
 import zernike
 import astropy.io.fits as fits
 
@@ -7,10 +8,14 @@ import astropy.io.fits as fits
 #
 def centroid(imag, x, y, boxsize, thresh):
     ibx = int(boxsize)
+    #print(boxsize)
     yi,xi=np.indices((ibx,ibx))
     box = imag[int(y-boxsize/2):int(y-boxsize/2)+ibx,int(x-boxsize/2):int(x-boxsize/2)+ibx].copy()
+    #pl.imshow(box)
+    #pl.show()
     edge = ((yi==0) + (yi==boxsize-1) + (xi==0) + (xi==boxsize-1))
-
+#     print('edge', len(edge))
+#     print('box', len(box))
     background = np.median(box[edge])
     box = box-background
 
@@ -51,6 +56,7 @@ def computecenter(pslicey):
     psliceymax = np.amax(pslicey)
     dp = pslicey[1:] - pslicey[:-1]
     for thresh in [0.5,0.6,0.7,0.8,0.2]:
+#         print('dp value', dp)
         dx = ( psliceymax * thresh - pslicey[1:] ) / dp
         crossings = abs(dx+0.5) < 0.5 
         crossers = np.where(crossings)[0]
@@ -68,8 +74,12 @@ def computecenter(pslicey):
     else:
         # Didn't find a central obscuration
         print('No central obscuration')
+        ################
         if len(yvals) == 0 or len(yvals) == 1:
             return(0, 0, 0)
+        # This pupildiay = 0 is what causes the zero division error.
+        # pupildiay=1 causes ValueError
+        #################
         else:
             pupildiay = yvals[1] - yvals[0]
             pupilobsc = 0
@@ -77,7 +87,7 @@ def computecenter(pslicey):
             return(pupildiay, pupilobsc,pupilcen)
 
 class SH:
-    def __init__(self, img, pixscale=1, flux_frac = 0.5, centroiding_threshold=0, background=None, pupil_radius_max = 1.0):
+    def __init__(self, img, pixscale=1, flux_frac = 0.5, centroiding_threshold=0, background=None, two_mirrors=False, pupil_radius_max = 1.0):
         if isinstance(img,np.ndarray):
             self.img = img
         elif isinstance(img,str):
@@ -96,6 +106,10 @@ class SH:
         self.centroiding_threshold = centroiding_threshold
         self.pupil_radius_max = pupil_radius_max
         
+        self.dual = two_mirrors
+    
+
+
         
     # Determine spacing and offset of an SH image
     # Save in self.spacings, self.offsets, each a 2-element array for x and y respectively
@@ -137,14 +151,22 @@ class SH:
 
         py,px = np.indices(pupilmap.shape)
         pupildia = (pupildiax + pupildiay) / 2
-        self.pupilx = (px - pupilcenx) / (pupildia / 2.)
-        self.pupily = (py - pupilceny) / (pupildia / 2.)
-        self.obscureratio = (pupilobscx + pupilobscy) / 2 / pupildia
-        self.pupilcenx = pupilcenx
-        self.pupilceny = pupilceny
-        self.pupildia = pupildia
-        pr2 = self.pupilx**2 + self.pupily**2
-        self.inpupil = (pr2 < 1) * (pr2 > self.obscureratio**2)
+        if pupildia != 0:
+            self.pupilx = (px - pupilcenx) / (pupildia / 2.)
+            self.pupily = (py - pupilceny) / (pupildia / 2.)
+            self.obscureratio = (pupilobscx + pupilobscy) / 2 / pupildia
+            self.pupilcenx = pupilcenx
+            self.pupilceny = pupilceny
+            self.pupildia = pupildia
+            pr2 = self.pupilx**2 + self.pupily**2
+            self.inpupil = (pr2 < 1) * (pr2 > self.obscureratio**2)
+        else: # when pupildia=0
+            self.pupilx = (px - pupilcenx) 
+            self.pupily = (py - pupilceny)
+            self.pupilcenx = pupilcenx
+            self.pupilceny = pupilceny
+            self.pupildia = pupildia
+            
     
     def computegridofcentroids(self):
         xmin = self.offsets[0]
@@ -169,6 +191,7 @@ class SH:
         for index_x, x in enumerate(np.arange(xmin, xmax, spacingx)):
             for index_y,y in enumerate(np.arange(ymin, ymax, spacingy)):
                 meanspacing = (spacingx + spacingy) / 2
+                print('spacingx', spacingx)
                 xcen, ycen, flux = centroid(img, x+spacingx/2, y+spacingy/2, round(spacingx), self.centroiding_threshold)
                 fluxmap[index_y,index_x] = flux
                 xcenmap[index_y,index_x] = xcen
@@ -199,7 +222,7 @@ class SH:
         pl.plot(self.xcentroids,self.ycentroids,'+')
 
 
-    def process(self, nzern = 10):
+    def process(self, nzern = 10, x1=None, y1=None, x2=None, y2=None):
         halist = []
         declist = []
         comaxlist = []
@@ -220,6 +243,11 @@ class SH:
         self.computepupilcoords()
         pupil_radius = np.sqrt(self.pupilx**2 + self.pupily**2)
 
+        ## use something similar to select left,rght
+#         if self.dual:
+#             mir1_spots_to_use = (fluxmap>fluxthresh) #* (
+#             mir2_spots_to_use = (fluxmap>fluxthresh)
+#         else:#if not self.dual:
         spots_to_use = (fluxmap>fluxthresh) * (pupil_radius< self.pupil_radius_max)
         self.spots_to_use  = spots_to_use
 
@@ -230,9 +258,31 @@ class SH:
         yrefs      = self.yrefmap[spots_to_use]
         fluxes     = self.fluxmap[spots_to_use]
 
+        def get_slope(x1, x2, y1, y2):
+            m = (y2-y1) / (x2-x1)
+            return m
+
+        
         # Compute normalized pupil coordinates
+        if self.dual:
+            m = get_slope(x1, x2, y1, y2)
+            y_intercept = (-m*x1) + y1
+            mirror1_spots_to_use  = np.zeros(spots_to_use.shape)
+            mirror2_spots_to_use  = np.zeros(spots_to_use.shape)
 
-
+            for i, col in enumerate(self.xcenmap):
+                for j, xcoord in enumerate(self.xcenmap[i]):
+                    if self.spots_to_use[i][j]:
+                        if self.ycenmap[i][j] <= (m*xcoord + y_intercept): # below or on the line
+                            # MIRROR1
+                            mirror1_spots_to_use[i][j] = 1
+                        else: # Above the line
+                            # MIRROR2
+                            mirror2_spots_to_use[i][j] = 1
+                            
+            self.mirror1_spots_to_use = mirror1_spots_to_use
+            self.mirror2_spots_to_use = mirror2_spots_to_use
+            nsp = self.mirror1_spots_to_use.shape[0]
         pupilx = self.pupilx[spots_to_use]
         pupily = self.pupily[spots_to_use]
         #print("Pupilx ", pupilx)
@@ -241,10 +291,12 @@ class SH:
         slopex = xcentroids - xrefs
         slopey = ycentroids - yrefs
 
+#         print('slopex shape', slopex.shape)
+#         print('slopey shape', slopey.shape)
         # Fit Zernikes
         # Get the slopes of each zernike term at the pupil coordinates
         nz=nzern
-
+        
         zerndx=[]
         zerndy=[]
         norms=[0]
@@ -252,20 +304,77 @@ class SH:
         zerndx.append(pupily)
         zerndy.append(-pupilx)
         # Zernike terms
-        for j in range(nz):
+        for j in range(nz): # creating each row of the matrix
             dzdx = zernike.duZdx(j+1,pupilx,pupily)
             dzdy = zernike.duZdy(j+1,pupilx,pupily)
             norm = np.sqrt(((dzdx*dzdx) + (dzdy*dzdy)).mean())
+            if j == 0 and self.dual:
+                # dzdx will have shape of pupilx
+                # dzdy will have shape of pupilx
+                duplicate_dzdx=[]
+                duplicate_dzdy=[]
+                for i, row in enumerate(mirror2_spots_to_use):
+                    for k, spot in enumerate(row):
+                        if spot == 1:
+                             # spot is on mirror2, so the value should be copied to the duplicate row
+                            duplicate_dzdx.append(dzdx[k])
+                            duplicate_dzdy.append(dzdy[k])
+                        else:
+                            # spot is on mirror1, so the value in the duplicate row should be zero
+                            duplicate_dzdx.append(0)
+                            duplicate_dzdy.append(0)
+                            
+                dupdzdx = np.reshape(duplicate_dzdx, (nsp,nsp))   
+                dupdzdy = np.reshape(duplicate_dzdy, (nsp,nsp))
+                duplicate_dzdx = dupdzdx[spots_to_use]
+                duplicate_dzdy = dupdzdy[spots_to_use]
+                
+                zerndx.append(dzdx/norm)
+                zerndx.append(duplicate_dzdx/norm)
+                zerndy.append(dzdy/norm)
+                zerndy.append(duplicate_dzdy/norm)
+                
+            elif j == 1 and self.dual:
+                 # dzdx will have shape of pupilx
+                # dzdy will have shape of pupilx
+                duplicate_dzdx=[]
+                duplicate_dzdy=[]
+                for i, row in enumerate(mirror2_spots_to_use):
+                    for k, spot in enumerate(row):
+                        if spot == 1:
+                             # spot is on mirror2, so the value should be copied to the duplicate row
+                            duplicate_dzdx.append(dzdx[k])
+                            duplicate_dzdy.append(dzdy[k])
+                        else:
+                            # spot is on mirror1, so the value in the duplicate row should be zero
+                            duplicate_dzdx.append(0)
+                            duplicate_dzdy.append(0)
+                dupdzdx = np.reshape(duplicate_dzdx, (nsp,nsp))   
+                dupdzdy = np.reshape(duplicate_dzdy, (nsp,nsp))
+                duplicate_dzdx = dupdzdx[spots_to_use]
+                duplicate_dzdy = dupdzdy[spots_to_use]
+                            
+                zerndx.append(dzdx/norm)
+                zerndx.append(duplicate_dzdx/norm)
+                zerndy.append(dzdy/norm)
+                zerndy.append(duplicate_dzdy/norm)
+                
+            else:
+                zerndx.append(dzdx/norm)
+                zerndy.append(dzdy/norm)
+                norms.append(norm)
+                
+#         print('zerndx shape', np.array(zerndx).shape)
+#         print('zerndy shape', np.array(zerndy).shape)
 
-            zerndx.append(dzdx/norm)
-            zerndy.append(dzdy/norm)
-            norms.append(norm)
         zxy = np.hstack([np.array(zerndx),np.array(zerndy)])
+    
         #print(zxy)
         self.zxy = zxy
-        spots = np.hstack([slopex,slopey])
+        spots = np.hstack([slopex,slopey]) # the data
         #print(spots)
-        zcoeffs=np.linalg.lstsq(zxy.T,spots,rcond=None)[0]
+        zcoeffs=np.linalg.lstsq(zxy.T,spots,rcond=None)[0] # actually perform the fit
+        # zernike coefficients evaluated at the locations of the spots
         np.set_printoptions(precision=3,suppress=True,linewidth=200)
 
         fit = zxy.T.dot(zcoeffs)
@@ -274,8 +383,27 @@ class SH:
         residx = resid[0]
         residy = resid[1]
         rms = resid.std() * np.sqrt(2) * self.pixscale
+        
+        if self.dual:
+            m = get_slope(x1, x2, y1, y2)
+            y_intercept = (-m*x1) + y1
+            m1  = np.zeros(np.sum(spots_to_use))
+            m2  = np.zeros(np.sum(spots_to_use))
+
+            for i, xcoord in enumerate(xcentroids):
+                if ycentroids[i] <= (m*xcoord + y_intercept): # below or on the line
+                            # MIRROR1
+                        m1[i] = 1
+                else: # Above the line
+                            # MIRROR2
+                        m2[i] = 1
+                            
+            self.m1 = m1
+            self.m2 = m2
 
         fit_ttf = zxy[:4].T.dot(zcoeffs[:4])
+        if self.dual: # avoid the duplicated rows
+            fit_ttf = np.array([zxy[0], zxy[1], zxy[3], zxy[5]]).T.dot(np.array([zcoeffs[0], zcoeffs[1], zcoeffs[3], zcoeffs[5]])) 
         resid_ttf = (spots - fit_ttf).reshape((2,-1))
         residx_ttf = resid_ttf[0]
         residy_ttf = resid_ttf[1]
@@ -297,13 +425,14 @@ class SH:
         self.xvec = xcentroids - self.xrefs_ttf
         self.yvec = ycentroids - self.yrefs_ttf
         
-        # High order 
+        # High order xc
         self.xyrefs_ho = self.xyrefs + fit.reshape((2,-1))
         self.xrefs_ho = self.xyrefs_ho[0]
         self.yrefs_ho = self.xyrefs_ho[1]
         self.xvec_ho = xcentroids - self.xrefs_ho
         self.yvec_ho = ycentroids - self.yrefs_ho
         self.norms = np.asarray(norms)
+    
 
     def generateimage(self,n,defocus,zmin,zmax):
         
